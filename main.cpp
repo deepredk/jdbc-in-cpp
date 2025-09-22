@@ -1,6 +1,6 @@
-#include <iostream>
+#include "ODBCConnection.h"
 
 int main() {
-    std::cout << "Hello, World!" << std::endl;
+    OdbcConnection connection("LOCAL", "root", "");
     return 0;
 }
