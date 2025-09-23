@@ -9,5 +9,8 @@ find_package(ODBC REQUIRED)
 
 add_executable(jdbc_in_cpp main.cpp
         ODBCConnection.h
-        ODBCConnection.cpp)
+        ODBCConnection.cpp
+        PreparedStatement.cpp
+        SQLUtil.cpp
+        SQLUtil.h)
 target_link_libraries(jdbc_in_cpp PUBLIC ODBC::ODBC)

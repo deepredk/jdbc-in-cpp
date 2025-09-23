@@ -4,6 +4,8 @@
 #include <sql.h>
 #include <string>
 
+#include "PreparedStatement.h"
+
 class OdbcConnection {
 public:
     OdbcConnection(const std::string& dataSourceName, const std::string& username, const std::string& password);
@@ -12,11 +14,13 @@ public:
     OdbcConnection(const OdbcConnection&) = delete;
     OdbcConnection& operator=(const OdbcConnection&) = delete;
 
+    [[nodiscard]] std::unique_ptr<PreparedStatement> prepareStatement(const std::string& sql) const;
+
+    void close();
+
 private:
     SQLHENV environment;
     SQLHDBC connection;
-
-    static SQLCHAR* toSQLCHARPtr(const std::string &str);
 };
 
 #endif
