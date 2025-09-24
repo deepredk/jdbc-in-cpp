@@ -12,5 +12,7 @@ add_executable(jdbc_in_cpp main.cpp
         ODBCConnection.cpp
         PreparedStatement.cpp
         SQLUtil.cpp
-        SQLUtil.h)
+        SQLUtil.h
+        ResultSet.cpp
+        ResultSet.h)
 target_link_libraries(jdbc_in_cpp PUBLIC ODBC::ODBC)

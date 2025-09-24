@@ -42,7 +42,7 @@ OdbcConnection::~OdbcConnection() {
     close();
 }
 
-std::unique_ptr<PreparedStatement> OdbcConnection::prepareStatement(const std::string& sql) const {
+PreparedStatement OdbcConnection::prepareStatement(const std::string& sql) const {
     SQLHSTMT statement;
     SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement);
     SQLRETURN resultPrepare = SQLPrepare(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())), SQL_NTS);
@@ -53,7 +53,7 @@ std::unique_ptr<PreparedStatement> OdbcConnection::prepareStatement(const std::s
         SQLUtil::logError(SQL_HANDLE_STMT, statement);
         throw std::runtime_error("Failed to prepare statement.");
     }
-    return std::make_unique<PreparedStatement>(statement);
+    return PreparedStatement(statement);
 }
 
 void OdbcConnection::close() {

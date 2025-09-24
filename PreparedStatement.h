@@ -7,6 +7,8 @@
 #include <variant>
 #include <sqltypes.h>
 
+#include "ResultSet.h"
+
 class PreparedStatement {
 public:
     explicit PreparedStatement(SQLHSTMT statement);
@@ -17,7 +19,8 @@ public:
     void setLong(int index, long long value);
     void setDouble(int index, double value);
 
-    int executeUpdate() const;
+    [[nodiscard]] ResultSet executeQuery() const;
+    [[nodiscard]] int executeUpdate() const;
     void execute() const;
 
     void close();

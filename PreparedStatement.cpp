@@ -118,6 +118,11 @@ void PreparedStatement::setDouble(int index, double value) {
     }
 }
 
+ResultSet PreparedStatement::executeQuery() const {
+    execute();
+    return ResultSet(statement);
+}
+
 int PreparedStatement::executeUpdate() const {
     execute();
 

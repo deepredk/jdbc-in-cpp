@@ -14,7 +14,7 @@ public:
     OdbcConnection(const OdbcConnection&) = delete;
     OdbcConnection& operator=(const OdbcConnection&) = delete;
 
-    [[nodiscard]] std::unique_ptr<PreparedStatement> prepareStatement(const std::string& sql) const;
+    [[nodiscard]] PreparedStatement prepareStatement(const std::string& sql) const;
 
     void close();
 
