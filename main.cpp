@@ -7,7 +7,7 @@ int main() {
 
     int insertedCount = odbcTemplate.update(
         "INSERT INTO test_table4 (str, inte, lon, doub) VALUES (?, ?, ?, ?)",
-        "test", 1, 2147483647L * 100L, 1.2345678901234567
+        "test", 3, 2147483647L * 100L, 1.2345678901234567
     );
     std::cout << "inserted: " << insertedCount << std::endl;
 
@@ -20,12 +20,46 @@ int main() {
     int deletedCount = odbcTemplate.update("DELETE FROM test_table4 WHERE inte = ?", 2);
     std::cout << "deleted: " << deletedCount << std::endl;
 
-    odbcTemplate.execute("DELETE FROM test_table4");
+    // odbcTemplate.execute("DELETE FROM test_table4");
 
-    auto selectPstmt = connection.prepareStatement("SELECT * FROM test_table4");
-    auto result = selectPstmt.executeQuery();
-    while (result.next()) {
-        std::cout << result.getString(1) << " " << result.getInt(2) << " " << result.getLong(3) << " " << result.getDouble(4) << std::endl;
+    struct TestTable4Dto {
+        std::string str;
+        int inte;
+        long lon;
+        double doub;
+    };
+    auto testTable4RowMapper = [](const ResultSet& rs) {
+        return TestTable4Dto{
+            rs.getString(1),
+            rs.getInt(2),
+            rs.getLong(3),
+            rs.getDouble(4)
+        };
+    };
+
+    auto rows = odbcTemplate.query<TestTable4Dto>(
+        "SELECT * FROM test_table4",
+        testTable4RowMapper
+    );
+    for (const auto& row : rows) {
+        std::cout << "query: " << row.str << " " << row.inte << " " << row.lon << " " << row.doub << std::endl;
+    }
+
+    auto row = odbcTemplate.queryForObject<TestTable4Dto>(
+        "SELECT * FROM test_table4 WHERE inte = ?",
+        testTable4RowMapper,
+        3
+    );
+    std::cout << "queryForObject: " << row.str << " " << row.inte << " " << row.lon << row.doub << std::endl;
+
+    auto intes = odbcTemplate.query<double>(
+        "SELECT inte FROM test_table4",
+        [](const ResultSet& rs) {
+            return rs.getDouble(1);
+        }
+    );
+    for (const auto& inte : intes) {
+        std::cout << "query(value): " << inte << std::endl;
     }
 
     return 0;

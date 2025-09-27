@@ -4,6 +4,8 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
+#include <stdexcept>
 
 #include "ODBCConnection.h"
 #include "ResultSet.h"
@@ -28,6 +30,29 @@ public:
             throw std::runtime_error("No rows returned.");
         }
         return getValue<T>(rs, 1);
+    }
+
+    template <typename T, typename RowMapper, typename... Args>
+    T queryForObject(const std::string& sql, RowMapper&& rowMapper, Args&&... args) {
+        auto pstmt = connection->prepareStatement(sql);
+        bindAll(pstmt, std::forward<Args>(args)...);
+        auto rs = pstmt.executeQuery();
+        if (!rs.next()) {
+            throw std::runtime_error("No rows returned.");
+        }
+        return std::forward<RowMapper>(rowMapper)(rs);
+    }
+
+    template <typename T, typename RowMapper, typename... Args>
+    std::vector<T> query(const std::string& sql, RowMapper&& rowMapper, Args&&... args) {
+        auto pstmt = connection->prepareStatement(sql);
+        bindAll(pstmt, std::forward<Args>(args)...);
+        auto rs = pstmt.executeQuery();
+        std::vector<T> results;
+        while (rs.next()) {
+            results.emplace_back(std::forward<RowMapper>(rowMapper)(rs));
+        }
+        return results;
     }
 
     template <typename... Args>
