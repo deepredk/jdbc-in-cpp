@@ -1,5 +1,5 @@
 #include "OdbcTemplate.h"
 
-OdbcTemplate::OdbcTemplate(OdbcConnection& connection) : connection(&connection) {
+OdbcTemplate::OdbcTemplate(OdbcConnection& connection) : connection(connection) {
 }
 
