@@ -3,6 +3,9 @@
 
 int main() {
     OdbcConnection connection("LOCAL", "root", "");
+    auto txStatus = connection.getTransactionStatus();
+    txStatus.setAutoCommit(false);
+
     OdbcTemplate odbcTemplate(connection);
 
     int insertedCount = odbcTemplate.update(
@@ -61,6 +64,8 @@ int main() {
     for (const auto& inte : intes) {
         std::cout << "query(value): " << inte << std::endl;
     }
+    txStatus.commit();
+    txStatus.rollback();
 
     return 0;
 }

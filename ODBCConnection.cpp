@@ -56,6 +56,10 @@ PreparedStatement OdbcConnection::prepareStatement(const std::string& sql) const
     return PreparedStatement(statement);
 }
 
+TransactionStatus OdbcConnection::getTransactionStatus() const {
+    return TransactionStatus(connection);
+}
+
 void OdbcConnection::close() {
     if (connection != SQL_NULL_HANDLE) {
         SQLDisconnect(connection);

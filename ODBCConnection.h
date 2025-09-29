@@ -5,6 +5,7 @@
 #include <string>
 
 #include "PreparedStatement.h"
+#include "TransactionStatus.h"
 
 class OdbcConnection {
 public:
@@ -15,6 +16,8 @@ public:
     OdbcConnection& operator=(const OdbcConnection&) = delete;
 
     [[nodiscard]] PreparedStatement prepareStatement(const std::string& sql) const;
+
+    [[nodiscard]] TransactionStatus getTransactionStatus() const;
 
     void close();
 
