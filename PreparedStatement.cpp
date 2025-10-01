@@ -150,7 +150,7 @@ void PreparedStatement::close() {
     }
     SQLFreeHandle(SQL_HANDLE_STMT, statement);
     statement = SQL_NULL_HANDLE;
-    std::cout << "Freed SQL statement handle." << std::endl;
+    // std::cout << "Freed SQL statement handle." << std::endl;
 }
 
 

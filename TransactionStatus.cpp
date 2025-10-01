@@ -24,7 +24,7 @@ void TransactionStatus::commit() const {
         SQLUtil::logError(SQL_HANDLE_DBC, connection);
         throw std::runtime_error("Failed to commit transaction.");
     }
-    std::cout << "Transaction committed." << std::endl;
+    // std::cout << "Transaction committed." << std::endl;
 }
 
 void TransactionStatus::rollback() const {
@@ -33,5 +33,5 @@ void TransactionStatus::rollback() const {
         SQLUtil::logError(SQL_HANDLE_DBC, connection);
         throw std::runtime_error("Failed to rollback transaction.");
     }
-    std::cout << "Transaction rolled back." << std::endl;
+    // std::cout << "Transaction rolled back." << std::endl;
 }
