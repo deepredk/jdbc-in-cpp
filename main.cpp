@@ -17,8 +17,9 @@ void incrementTenTimes(int id, int updateCount, bool usePessimistic) {
     OdbcTemplate odbcTemplate(connection);
 
     for (int i = 0; i < updateCount; i++) {
-        int currentValue = getValue(odbcTemplate, id, usePessimistic);
+        int currentValue;
         if (usePessimistic) {
+            currentValue = getValue(odbcTemplate, id, usePessimistic);
             odbcTemplate.execute("update transaction_test set value = ? where id = ?", currentValue + 1, id);
         } else {
             int tried = 0;
