@@ -17,5 +17,7 @@ add_executable(jdbc_in_cpp main.cpp
         ResultSet.h
         ODBCTemplate.cpp
         ODBCTemplate.h
-        TransactionStatus.cpp)
+        TransactionStatus.cpp
+        odbc_main.cpp
+        transaction_main.cpp)
 target_link_libraries(jdbc_in_cpp PUBLIC ODBC::ODBC)
