@@ -1,15 +1,21 @@
 #include "OdbcTemplate.h"
+#include <iostream>
 #include <thread>
+#include <future>
+#include <vector>
 #include <chrono>
+#include <string>
 
-int getValue(OdbcTemplate& odbcTemplate, int id, bool usePessimistic) {
+static int getValue(OdbcTemplate& odbcTemplate, int id, bool usePessimistic) {
     if (usePessimistic) {
-        return odbcTemplate.queryForValue<int>("select value from transaction_test where id = ? for update", id);
+        return odbcTemplate.queryForValue<int>(
+            "select value from transaction_test where id = ? for update", id);
     }
-    return odbcTemplate.queryForValue<int>("select value from transaction_test where id = ?", id);
+    return odbcTemplate.queryForValue<int>(
+        "select value from transaction_test where id = ?", id);
 }
 
-void incrementTenTimes(int id, int updateCount, bool usePessimistic) {
+static void incrementN(int id, int updateCount, bool usePessimistic) {
     OdbcConnection connection("LOCAL", "root", "");
     auto txStatus = connection.getTransactionStatus();
     txStatus.setAutoCommit(false);
@@ -17,69 +23,79 @@ void incrementTenTimes(int id, int updateCount, bool usePessimistic) {
     OdbcTemplate odbcTemplate(connection);
 
     for (int i = 0; i < updateCount; i++) {
-        int currentValue;
         if (usePessimistic) {
-            currentValue = getValue(odbcTemplate, id, usePessimistic);
-            odbcTemplate.execute("update transaction_test set value = ? where id = ?", currentValue + 1, id);
+            int currentValue = getValue(odbcTemplate, id, true);
+            odbcTemplate.execute(
+                "update transaction_test set value = ? where id = ?",
+                currentValue + 1, id
+            );
         } else {
-            int tried = 0;
             while (true) {
-                tried++;
-                currentValue = getValue(odbcTemplate, id, usePessimistic);
-                bool updated = odbcTemplate.update("update transaction_test set value = ? where id = ? and value = ?", currentValue + 1, id, currentValue) > 0;
-                if (updated) break;
+                int currentValue = getValue(odbcTemplate, id, false);
+                int updated = odbcTemplate.update(
+                    "update transaction_test set value = ? where id = ? and value = ?",
+                    currentValue + 1, id, currentValue
+                );
+                if (updated > 0) break;
                 txStatus.rollback();
             }
-            // std::cout << tried << "번의 시도 끝에 optimistic00 lock으로 update 성공" << std::endl;
         }
         txStatus.commit();
     }
 }
 
-int getValue(int id) {
+static int getCurrentValue(int id) {
     OdbcConnection connection("LOCAL", "root", "");
     OdbcTemplate odbcTemplate(connection);
-    return odbcTemplate.queryForValue<int>("select value from transaction_test where id = ?", id);
+    return odbcTemplate.queryForValue<int>(
+        "select value from transaction_test where id = ?", id);
 }
 
-// create table lock_test(id int primary key auto_increment, value int not null);
 int main() {
-    std::cout << "optimistic(0) or pessimistic(1): ";
-    bool usePessimistic;
-    std::cin >> usePessimistic;
+    bool usePessimistic = false; // 무조건 낙관락
 
-    std::cout << "threadCount: ";
-    int threadCount;
-    std::cin >> threadCount;
+    bool useAsync;
+    std::cout << "sync(0) or async(1): ";
+    std::cin >> useAsync;
 
-    std::cout << "updateCount: ";
+    int concurrentCount;
+    std::cout << "concurrentCount: ";
+    std::cin >> concurrentCount;
+
     int updateCount;
+    std::cout << "updateCount: ";
     std::cin >> updateCount;
 
     constexpr int rowId = 1;
-    int beforeValue = getValue(rowId);
+
+    int beforeValue = getCurrentValue(rowId);
     std::cout << "beforeValue: " << beforeValue << std::endl;
 
-    std::vector<std::thread> threads;
-
     auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < threadCount; i++) {
-        threads.emplace_back(incrementTenTimes, rowId, updateCount, usePessimistic);
+
+    if (useAsync) {
+        std::vector<std::future<void>> futures;
+        futures.reserve(concurrentCount);
+        for (int i = 0; i < concurrentCount; ++i) {
+            futures.emplace_back(std::async(std::launch::async, incrementN, rowId, updateCount, usePessimistic));
+        }
+        for (auto& f : futures) f.get();
+    } else {
+        std::vector<std::thread> threads;
+        threads.reserve(concurrentCount);
+        for (int i = 0; i < concurrentCount; ++i) {
+            threads.emplace_back(incrementN, rowId, updateCount, usePessimistic);
+        }
+        for (auto& t : threads) t.join();
     }
 
-    for (auto& thread : threads) {
-        thread.join();
-    }
     auto end = std::chrono::high_resolution_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "elapsedMs: " << elapsedMs << std::endl;
 
-    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    std::cout << "스레드들 시작으로부터 전부 끝날때까지 elapsedMs: " << elapsedMs.count() << std::endl;
-
-    int afterValue = getValue(rowId);
+    int afterValue = getCurrentValue(rowId);
     std::cout << "afterValue: " << afterValue << std::endl;
-
-    std::cout << "total incremented: " << afterValue - beforeValue;
+    std::cout << "total incremented: " << (afterValue - beforeValue) << std::endl;
 
     return 0;
 }
-
