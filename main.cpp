@@ -1,5 +1,6 @@
 #include "OdbcTemplate.h"
 #include <thread>
+#include <chrono>
 
 int getValue(OdbcTemplate& odbcTemplate, int id, bool usePessimistic) {
     if (usePessimistic) {
@@ -8,14 +9,14 @@ int getValue(OdbcTemplate& odbcTemplate, int id, bool usePessimistic) {
     return odbcTemplate.queryForValue<int>("select value from transaction_test where id = ?", id);
 }
 
-void incrementTenTimes(int id, bool usePessimistic) {
+void incrementTenTimes(int id, int updateCount, bool usePessimistic) {
     OdbcConnection connection("LOCAL", "root", "");
     auto txStatus = connection.getTransactionStatus();
     txStatus.setAutoCommit(false);
 
     OdbcTemplate odbcTemplate(connection);
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < updateCount; i++) {
         int currentValue = getValue(odbcTemplate, id, usePessimistic);
         if (usePessimistic) {
             odbcTemplate.execute("update transaction_test set value = ? where id = ?", currentValue + 1, id);
@@ -28,7 +29,7 @@ void incrementTenTimes(int id, bool usePessimistic) {
                 if (updated) break;
                 txStatus.rollback();
             }
-            std::cout << tried << "번의 시도 끝에 optimistic lock으로 update 성공" << std::endl;
+            // std::cout << tried << "번의 시도 끝에 optimistic00 lock으로 update 성공" << std::endl;
         }
         txStatus.commit();
     }
@@ -46,20 +47,32 @@ int main() {
     bool usePessimistic;
     std::cin >> usePessimistic;
 
+    std::cout << "threadCount: ";
+    int threadCount;
+    std::cin >> threadCount;
+
+    std::cout << "updateCount: ";
+    int updateCount;
+    std::cin >> updateCount;
+
     constexpr int rowId = 1;
     int beforeValue = getValue(rowId);
     std::cout << "beforeValue: " << beforeValue << std::endl;
 
     std::vector<std::thread> threads;
 
-    constexpr int threadCount = 10;
+    auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < threadCount; i++) {
-        threads.emplace_back(incrementTenTimes, rowId, usePessimistic);
+        threads.emplace_back(incrementTenTimes, rowId, updateCount, usePessimistic);
     }
 
     for (auto& thread : threads) {
         thread.join();
     }
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "스레드들 시작으로부터 전부 끝날때까지 elapsedMs: " << elapsedMs.count() << std::endl;
 
     int afterValue = getValue(rowId);
     std::cout << "afterValue: " << afterValue << std::endl;
