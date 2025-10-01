@@ -1,101 +1,231 @@
-#include "OdbcTemplate.h"
 #include <iostream>
+#include <string>
 #include <thread>
 #include <future>
-#include <vector>
 #include <chrono>
-#include <string>
+#include <array>
+#include <memory>
 
-static int getValue(OdbcTemplate& odbcTemplate, int id, bool usePessimistic) {
-    if (usePessimistic) {
-        return odbcTemplate.queryForValue<int>(
-            "select value from transaction_test where id = ? for update", id);
-    }
-    return odbcTemplate.queryForValue<int>(
-        "select value from transaction_test where id = ?", id);
+#include "ODBCConnection.h"
+#include "OdbcTemplate.h"
+#include "TransactionStatus.h"
+
+enum class IsolationLevel {
+    ReadUncommitted = 1,
+    ReadCommitted = 2,
+    RepeatableRead = 3,
+    Serializable = 4
+};
+
+static constexpr std::array kIsolationSql = {
+    "READ UNCOMMITTED",
+    "READ COMMITTED",
+    "REPEATABLE READ",
+    "SERIALIZABLE"
+};
+
+static const char* toSql(const IsolationLevel level) {
+    const auto idx = static_cast<size_t>(static_cast<int>(level) - 1);
+    return kIsolationSql[idx];
 }
 
-static void incrementN(int id, int updateCount, bool usePessimistic) {
+bool isSerializable(const IsolationLevel level) {
+    return level == IsolationLevel::Serializable;
+}
+
+static constexpr std::array kChoiceToIsolation = {
+    IsolationLevel::ReadUncommitted,
+    IsolationLevel::ReadCommitted,
+    IsolationLevel::RepeatableRead,
+    IsolationLevel::Serializable
+};
+
+void ensureTransactionTestTable() {
     OdbcConnection connection("LOCAL", "root", "");
-    auto txStatus = connection.getTransactionStatus();
-    txStatus.setAutoCommit(false);
-
     OdbcTemplate odbcTemplate(connection);
+    odbcTemplate.execute("CREATE TABLE IF NOT EXISTS transaction_test (\n"
+                         "  id INT NOT NULL PRIMARY KEY AUTO_INCREMENT,\n"
+                         "  value INT NOT NULL\n"
+                         ")");
+    odbcTemplate.execute("INSERT INTO transaction_test(id, value) VALUES (1, 100)\n"
+                         "ON DUPLICATE KEY UPDATE value = VALUES(value)");
+}
 
-    for (int i = 0; i < updateCount; i++) {
-        if (usePessimistic) {
-            int currentValue = getValue(odbcTemplate, id, true);
-            odbcTemplate.execute(
-                "update transaction_test set value = ? where id = ?",
-                currentValue + 1, id
-            );
-        } else {
-            while (true) {
-                int currentValue = getValue(odbcTemplate, id, false);
-                int updated = odbcTemplate.update(
-                    "update transaction_test set value = ? where id = ? and value = ?",
-                    currentValue + 1, id, currentValue
-                );
-                if (updated > 0) break;
-                txStatus.rollback();
-            }
-        }
-        txStatus.commit();
+void ensurePhantomTestTableCleared() {
+    OdbcConnection conn("LOCAL", "root", "");
+    OdbcTemplate tpl(conn);
+    tpl.execute("CREATE TABLE IF NOT EXISTS phantom_test (\n"
+                "  id INT NOT NULL PRIMARY KEY AUTO_INCREMENT\n"
+                ")");
+    tpl.execute("DELETE FROM phantom_test");
+}
+
+void applyIsolation(OdbcTemplate& tpl, const IsolationLevel isolation) {
+    std::string sql = std::string("SET SESSION TRANSACTION ISOLATION LEVEL ") + toSql(isolation);
+    tpl.execute(sql);
+}
+
+struct Session {
+    OdbcConnection connection;
+    OdbcTemplate odbcTemplate;
+    TransactionStatus txStatus;
+    Session() : connection("LOCAL", "root", ""), odbcTemplate(connection), txStatus(connection.getTransactionStatus()) {}
+};
+
+template <typename Phase1, typename Phase2, typename Other>
+static void runWithOptionalThreads(bool useThreads, Phase1&& phase1, Other&& middle, Phase2&& phase2) {
+    std::promise<void> phase1DonePromise;
+    auto phase1Done = phase1DonePromise.get_future().share();
+
+    if (useThreads) {
+        std::thread splitThread([&] {
+            phase1(phase1DonePromise);
+            phase2();
+        });
+        std::thread otherThread([&] {
+            phase1Done.wait();
+            middle();
+        });
+        splitThread.join();
+        otherThread.join();
+    } else {
+        phase1(phase1DonePromise);
+        middle();
+        phase2();
     }
 }
 
-static int getCurrentValue(int id) {
-    OdbcConnection connection("LOCAL", "root", "");
-    OdbcTemplate odbcTemplate(connection);
-    return odbcTemplate.queryForValue<int>(
-        "select value from transaction_test where id = ?", id);
+static void resetTransactionTestValue(int value) {
+    OdbcConnection admin("LOCAL", "root", "");
+    OdbcTemplate adminTpl(admin);
+    adminTpl.execute("UPDATE transaction_test SET value = ? WHERE id = 1", value);
+}
+
+static int getValue(OdbcTemplate& tpl, int id) {
+    return tpl.queryForValue<int>("SELECT value FROM transaction_test WHERE id = ?", id);
+}
+
+static void runDirtyReadTest(const IsolationLevel isolation) {
+    resetTransactionTestValue(100);
+
+    int aBefore = 0;
+    int bSeenAfterAUpdate = 0;
+    std::shared_ptr<Session> aSession;
+
+    auto aPhase1 = [&](std::promise<void>& ready) {
+        aSession = std::make_shared<Session>();
+        applyIsolation(aSession->odbcTemplate, isolation);
+        aSession->txStatus.setAutoCommit(false);
+        aBefore = getValue(aSession->odbcTemplate, 1);
+        aSession->odbcTemplate.execute("UPDATE transaction_test SET value = ? WHERE id = 1", aBefore + 1);
+        ready.set_value();
+    };
+    auto aPhase2 = [&] {
+        aSession->txStatus.rollback();
+    };
+    auto bAll = [&] {
+        Session b;
+        applyIsolation(b.odbcTemplate, isolation);
+        b.txStatus.setAutoCommit(false);
+        bSeenAfterAUpdate = b.odbcTemplate.queryForValue<int>("SELECT value FROM transaction_test WHERE id = 1");
+        b.txStatus.rollback();
+    };
+
+    runWithOptionalThreads(isSerializable(isolation), aPhase1, bAll, aPhase2);
+
+    const bool dirtyOccurred = (bSeenAfterAUpdate == aBefore + 1);
+
+    std::cout << "Dirty read 테스트 결과:\n";
+    std::cout << " A가 처음 읽은 값: " << aBefore
+              << ", A가 커밋 없이 update한 값: " << (aBefore + 1)
+              << ", B가 본 값: " << bSeenAfterAUpdate << "\n";
+    std::cout << " Dirty read 발생 여부: " << (dirtyOccurred ? "예" : "아니오") << "\n\n";
+}
+
+static void runNonRepeatableReadTest(const IsolationLevel isolation) {
+    resetTransactionTestValue(200);
+
+    int bRead1 = 0;
+    int bRead2 = 0;
+    std::shared_ptr<Session> bSession;
+
+    auto bPhase1 = [&](std::promise<void>& ready) {
+        bSession = std::make_shared<Session>();
+        applyIsolation(bSession->odbcTemplate, isolation);
+        bSession->txStatus.setAutoCommit(false);
+        bRead1 = getValue(bSession->odbcTemplate, 1);
+        ready.set_value();
+    };
+    auto bPhase2 = [&] {
+        bRead2 = getValue(bSession->odbcTemplate, 1);
+        bSession->txStatus.rollback();
+    };
+    auto aAll = [&] {
+        Session a;
+        applyIsolation(a.odbcTemplate, isolation);
+        a.txStatus.setAutoCommit(false);
+        a.odbcTemplate.execute("UPDATE transaction_test SET value = ? WHERE id = 1", bRead1 + 1);
+        a.txStatus.commit();
+    };
+
+    runWithOptionalThreads(isSerializable(isolation), bPhase1, aAll, bPhase2);
+
+    const bool nonRepeatableOccurred = (bRead1 != bRead2);
+    std::cout << "Non-repeatable read 테스트 결과:\n";
+    std::cout << " B의 첫 번째 읽기: " << bRead1
+              << ", A가 커밋한 값: " << (bRead1 + 1)
+              << ", B의 두 번째 읽기: " << bRead2 << "\n";
+    std::cout << " Non-repeatable read 발생 여부: " << (nonRepeatableOccurred ? "예" : "아니오") << "\n\n";
+}
+
+static void runPhantomReadTest(const IsolationLevel isolation) {
+    ensurePhantomTestTableCleared();
+
+    long long aCount1 = 0;
+    long long aCount2 = 0;
+    std::shared_ptr<Session> aSession;
+
+    auto aPhase1 = [&](std::promise<void>& ready) {
+        aSession = std::make_shared<Session>();
+        applyIsolation(aSession->odbcTemplate, isolation);
+        aSession->txStatus.setAutoCommit(false);
+        aCount1 = aSession->odbcTemplate.queryForValue<long long>("SELECT COUNT(*) FROM phantom_test");
+        ready.set_value();
+    };
+    auto aPhase2 = [&] {
+        aCount2 = aSession->odbcTemplate.queryForValue<long long>("SELECT COUNT(*) FROM phantom_test");
+        aSession->txStatus.rollback();
+    };
+    auto bAll = [&] {
+        Session b;
+        applyIsolation(b.odbcTemplate, isolation);
+        b.txStatus.setAutoCommit(false);
+        b.odbcTemplate.execute("INSERT INTO phantom_test(id) VALUES (NULL)");
+        b.txStatus.commit();
+    };
+
+    runWithOptionalThreads(isSerializable(isolation), aPhase1, bAll, aPhase2);
+
+    const bool phantomOccurred = (aCount1 != aCount2);
+    std::cout << "Phantom read 테스트 결과:\n";
+    std::cout << " A의 첫 번째 행 개수: " << aCount1
+              << ", B가 insert 후 커밋, A의 두 번째 개수: " << aCount2 << "\n";
+    std::cout << " Phantom read 발생 여부: " << (phantomOccurred ? "예" : "아니오") << "\n";
 }
 
 int main() {
-    bool usePessimistic = false; // 무조건 낙관락
+    int choice;
+    std::cout << "1) READ UNCOMMITTED\n2) READ COMMITTED\n3) REPEATABLE READ\n4) SERIALIZABLE\n> ";
+    std::cin >> choice;
 
-    bool useAsync;
-    std::cout << "sync(0) or async(1): ";
-    std::cin >> useAsync;
+    const IsolationLevel isolation = kChoiceToIsolation[static_cast<size_t>(choice - 1)];
 
-    int concurrentCount;
-    std::cout << "concurrentCount: ";
-    std::cin >> concurrentCount;
+    ensureTransactionTestTable();
+    ensurePhantomTestTableCleared();
 
-    int updateCount;
-    std::cout << "updateCount: ";
-    std::cin >> updateCount;
-
-    constexpr int rowId = 1;
-
-    int beforeValue = getCurrentValue(rowId);
-    std::cout << "beforeValue: " << beforeValue << std::endl;
-
-    auto start = std::chrono::high_resolution_clock::now();
-
-    if (useAsync) {
-        std::vector<std::future<void>> futures;
-        futures.reserve(concurrentCount);
-        for (int i = 0; i < concurrentCount; ++i) {
-            futures.emplace_back(std::async(std::launch::async, incrementN, rowId, updateCount, usePessimistic));
-        }
-        for (auto& f : futures) f.get();
-    } else {
-        std::vector<std::thread> threads;
-        threads.reserve(concurrentCount);
-        for (int i = 0; i < concurrentCount; ++i) {
-            threads.emplace_back(incrementN, rowId, updateCount, usePessimistic);
-        }
-        for (auto& t : threads) t.join();
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "elapsedMs: " << elapsedMs << std::endl;
-
-    int afterValue = getCurrentValue(rowId);
-    std::cout << "afterValue: " << afterValue << std::endl;
-    std::cout << "total incremented: " << (afterValue - beforeValue) << std::endl;
+    runDirtyReadTest(isolation);
+    runNonRepeatableReadTest(isolation);
+    runPhantomReadTest(isolation);
 
     return 0;
 }
